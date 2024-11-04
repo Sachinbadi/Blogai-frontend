@@ -1,7 +1,7 @@
 'use client'
 
 import React from 'react'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, FormEvent } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,9 +12,11 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Moon, Sun, User, Settings, Search, Bell, Home, BookOpen, PenTool, Share2, LogOut } from 'lucide-react'
+import { Moon, Sun, User, Settings, Search, Bell, Home, BookOpen, PenTool, Share2, LogOut, Filter } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useRouter } from 'next/navigation'
+import AuthService from '@/services/auth'
+import axios from '@/lib/axios'
 
 interface Blog {
   id: number
@@ -24,6 +26,19 @@ interface Blog {
   image: string
   author: string
   date: string
+}
+
+interface User {
+  name: string
+  email: string
+}
+
+interface ShareFormData {
+  blogId: number
+  title: string
+  takeaways: string
+  tone: string
+  writingStyle: string
 }
 
 const blogs: Blog[] = [
@@ -164,12 +179,35 @@ const blogs: Blog[] = [
   }
 ]
 
+interface FilterState {
+  author: string
+  date: string
+  category: string
+}
+
 export function DashboardPage() {
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false)
   const [isBlogDialogOpen, setIsBlogDialogOpen] = useState(false)
   const [selectedBlog, setSelectedBlog] = useState<Blog | null>(null)
   const [isDarkMode, setIsDarkMode] = useState(false)
   const router = useRouter()
+  const [user, setUser] = useState<User | null>(null)
+  const [isFilterOpen, setIsFilterOpen] = useState(false)
+  const [filters, setFilters] = useState<FilterState>({
+    author: 'all',
+    date: 'all',
+    category: 'all'
+  })
+  const [filteredBlogs, setFilteredBlogs] = useState<Blog[]>(blogs)
+  const [shareFormData, setShareFormData] = useState<ShareFormData>({
+    blogId: 0,
+    title: '',
+    takeaways: '',
+    tone: '',
+    writingStyle: ''
+  })
+  const [searchQuery, setSearchQuery] = useState('')
+  const [currentUser, setCurrentUser] = useState<User | null>(null)
 
   useEffect(() => {
     if (isDarkMode) {
@@ -179,9 +217,24 @@ export function DashboardPage() {
     }
   }, [isDarkMode])
 
+  useEffect(() => {
+    const user = AuthService.getUser()
+    if (user) {
+      setCurrentUser({
+        name: user.username,
+        email: `${user.username}` // Update this if you store email
+      })
+    }
+  }, [])
+
   const handleShareClick = (e: React.MouseEvent, blog: Blog) => {
     e.stopPropagation()
     setSelectedBlog(blog)
+    setShareFormData({
+      ...shareFormData,
+      blogId: blog.id,
+      title: blog.title
+    })
     setIsShareDialogOpen(true)
   }
 
@@ -195,7 +248,88 @@ export function DashboardPage() {
   }
 
   const handleLogout = () => {
+    AuthService.logout()
     router.push('/auth')
+  }
+
+  const applyFilters = useCallback(() => {
+    let filtered = [...blogs]
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase()
+      filtered = filtered.filter(blog => {
+        return (
+          blog.title.toLowerCase().includes(query) ||
+          blog.description.toLowerCase().includes(query) ||
+          blog.fullDescription.toLowerCase().includes(query) ||
+          blog.author.toLowerCase().includes(query)
+        )
+      })
+    }
+
+    if (filters.author !== 'all') {
+      filtered = filtered.filter(blog => blog.author === filters.author)
+    }
+
+    if (filters.date !== 'all') {
+      const now = new Date()
+      filtered = filtered.filter(blog => {
+        const blogDate = new Date(blog.date)
+        switch (filters.date) {
+          case 'last-week':
+            return (now.getTime() - blogDate.getTime()) <= 7 * 24 * 60 * 60 * 1000
+          case 'last-month':
+            return (now.getTime() - blogDate.getTime()) <= 30 * 24 * 60 * 60 * 1000
+          case 'last-year':
+            return (now.getTime() - blogDate.getTime()) <= 365 * 24 * 60 * 60 * 1000
+          default:
+            return true
+        }
+      })
+    }
+
+    if (filters.category !== 'all') {
+      filtered = filtered.filter(blog => {
+        const blogContent = (blog.title + blog.description + blog.fullDescription).toLowerCase()
+        return blogContent.includes(filters.category.toLowerCase())
+      })
+    }
+
+    setFilteredBlogs(filtered)
+  }, [filters, searchQuery])
+
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      applyFilters()
+    }, 300)
+
+    return () => clearTimeout(timeoutId)
+  }, [searchQuery, applyFilters])
+
+  const handleShareSubmit = async (e: FormEvent) => {
+    e.preventDefault()
+    
+    try {
+      const response = await axios.post('/api/blogs/share', shareFormData)
+      
+      // Close dialog and show success message
+      setIsShareDialogOpen(false)
+      
+      // Reset form
+      setShareFormData({
+        blogId: 0,
+        title: '',
+        takeaways: '',
+        tone: '',
+        writingStyle: ''
+      })
+      
+      // You can add a toast notification here for success
+      
+    } catch (error) {
+      console.error('Error sharing blog:', error)
+      // You can add error handling/toast here
+    }
   }
 
   return (
@@ -212,14 +346,27 @@ export function DashboardPage() {
               <Home className="mr-3 h-5 w-5" />
               Home
             </Link>
-            <Link href="/dashboard/my-blogs" className="flex items-center py-2 px-4 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors duration-200">
+            <Link 
+              href="/dashboard/my-blogs" 
+              className="flex items-center py-2 px-4 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors duration-200"
+            >
               <BookOpen className="mr-3 h-5 w-5" />
               My Blogs
             </Link>
-            <Link href="/dashboard/create" className="flex items-center py-2 px-4 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors duration-200">
+            <Link 
+              href="/dashboard/create" 
+              className="flex items-center py-2 px-4 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors duration-200"
+            >
               <PenTool className="mr-3 h-5 w-5" />
               Create Blog
             </Link>
+            <button
+              onClick={() => setIsFilterOpen(true)}
+              className="w-full flex items-center py-2 px-4 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors duration-200"
+            >
+              <Filter className="mr-3 h-5 w-5" />
+              Filter Blogs
+            </button>
           </nav>
         </div>
       </aside>
@@ -233,7 +380,13 @@ export function DashboardPage() {
             <div className="flex items-center space-x-4">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-                <Input type="search" placeholder="Search blogs..." className="pl-10 w-64 dark:bg-gray-700 dark:text-white" />
+                <Input 
+                  type="search" 
+                  placeholder="Search blogs..." 
+                  className="pl-10 w-64 dark:bg-gray-700 dark:text-white"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
               </div>
               <TooltipProvider>
                 <Tooltip>
@@ -266,26 +419,24 @@ export function DashboardPage() {
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" className="relative h-8 w-8 rounded-full">
                     <Avatar className="h-8 w-8">
-                      <AvatarImage src="/placeholder.svg?height=32&width=32" alt="User" />
-                      <AvatarFallback>JD</AvatarFallback>
+                      <AvatarImage src="/placeholder.svg?height=32&width=32" alt={currentUser?.name || 'User'} />
+                      <AvatarFallback>{currentUser?.name?.slice(0, 2).toUpperCase() || 'U'}</AvatarFallback>
                     </Avatar>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent className="w-56" align="end" forceMount>
                   <DropdownMenuLabel className="font-normal">
                     <div className="flex flex-col space-y-1">
-                      <p className="text-sm font-medium leading-none">John Doe</p>
-                      <p className="text-xs leading-none text-muted-foreground">john@example.com</p>
+                      <p className="text-sm font-medium leading-none">{currentUser?.name || 'Guest'}</p>
+                      <p className="text-xs leading-none text-muted-foreground">
+                        {currentUser?.email || 'guest@example.com'}
+                      </p>
                     </div>
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem>
                     <User className="mr-2 h-4 w-4" />
                     <span>Account</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem>
-                    <Settings className="mr-2 h-4 w-4" />
-                    <span>Preferences</span>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleLogout} className="cursor-pointer">
@@ -302,7 +453,7 @@ export function DashboardPage() {
         <main className="flex-1 overflow-x-hidden overflow-y-auto bg-gray-50 dark:bg-gray-900 transition-colors duration-200">
           <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {blogs.map((blog) => (
+              {filteredBlogs.map((blog) => (
                 <Card key={blog.id} className="transition-all duration-300 hover:shadow-lg hover:scale-105 dark:bg-gray-800 overflow-hidden cursor-pointer" onClick={() => handleBlogClick(blog)}>
                   <CardHeader className="p-0">
                     <img src={blog.image} alt={blog.title} className="w-full h-48 object-cover" />
@@ -326,6 +477,11 @@ export function DashboardPage() {
                   </CardFooter>
                 </Card>
               ))}
+              {filteredBlogs.length === 0 && (
+                <div className="col-span-full text-center py-10 text-gray-500 dark:text-gray-400">
+                  <p>No blogs match your filter criteria</p>
+                </div>
+              )}
             </div>
           </div>
         </main>
@@ -338,18 +494,39 @@ export function DashboardPage() {
             <DialogTitle>Share Blog</DialogTitle>
             <DialogDescription>Fill out the details to share this blog post.</DialogDescription>
           </DialogHeader>
-          <form className="space-y-4">
+          <form onSubmit={handleShareSubmit} className="space-y-4">
             <div>
               <Label htmlFor="title">Title</Label>
-              <Input id="title" defaultValue={selectedBlog?.title} />
+              <Input 
+                id="title" 
+                value={shareFormData.title}
+                onChange={(e) => setShareFormData({
+                  ...shareFormData,
+                  title: e.target.value
+                })}
+              />
             </div>
             <div>
               <Label htmlFor="takeaways">Key Takeaways</Label>
-              <Textarea id="takeaways" placeholder="Enter key takeaways..." />
+              <Textarea 
+                id="takeaways" 
+                placeholder="Enter key takeaways..."
+                value={shareFormData.takeaways}
+                onChange={(e) => setShareFormData({
+                  ...shareFormData,
+                  takeaways: e.target.value
+                })}
+              />
             </div>
             <div>
               <Label htmlFor="tone">Tone</Label>
-              <Select>
+              <Select
+                value={shareFormData.tone}
+                onValueChange={(value) => setShareFormData({
+                  ...shareFormData,
+                  tone: value
+                })}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Select tone" />
                 </SelectTrigger>
@@ -362,7 +539,13 @@ export function DashboardPage() {
             </div>
             <div>
               <Label htmlFor="writing-style">Writing Style</Label>
-              <Select>
+              <Select
+                value={shareFormData.writingStyle}
+                onValueChange={(value) => setShareFormData({
+                  ...shareFormData,
+                  writingStyle: value
+                })}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Select writing style" />
                 </SelectTrigger>
@@ -373,10 +556,10 @@ export function DashboardPage() {
                 </SelectContent>
               </Select>
             </div>
+            <DialogFooter>
+              <Button type="submit">Share</Button>
+            </DialogFooter>
           </form>
-          <DialogFooter>
-            <Button type="submit">Share</Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -406,6 +589,84 @@ export function DashboardPage() {
               Share
             </Button>
             <Button onClick={() => setIsBlogDialogOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Filter Dialog */}
+      <Dialog open={isFilterOpen} onOpenChange={setIsFilterOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Filter Blogs</DialogTitle>
+            <DialogDescription>
+              Select criteria to filter the blog posts.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="author">Author</Label>
+              <Select
+                value={filters.author}
+                onValueChange={(value) => setFilters({ ...filters, author: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select author" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Authors</SelectItem>
+                  <SelectItem value="Dr. Emily Chen">Dr. Emily Chen</SelectItem>
+                  <SelectItem value="Dr. Michael Johnson">Dr. Michael Johnson</SelectItem>
+                  <SelectItem value="Prof. Sarah Lee">Prof. Sarah Lee</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="date">Date</Label>
+              <Select
+                value={filters.date}
+                onValueChange={(value) => setFilters({ ...filters, date: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select date range" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Time</SelectItem>
+                  <SelectItem value="last-week">Last Week</SelectItem>
+                  <SelectItem value="last-month">Last Month</SelectItem>
+                  <SelectItem value="last-year">Last Year</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="category">Category</Label>
+              <Select
+                value={filters.category}
+                onValueChange={(value) => setFilters({ ...filters, category: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Categories</SelectItem>
+                  <SelectItem value="ai">Artificial Intelligence</SelectItem>
+                  <SelectItem value="ml">Machine Learning</SelectItem>
+                  <SelectItem value="nlp">Natural Language Processing</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setFilters({ author: 'all', date: 'all', category: 'all' })
+            }}>
+              Reset
+            </Button>
+            <Button onClick={() => {
+              applyFilters()
+              setIsFilterOpen(false)
+            }}>
+              Apply Filters
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
