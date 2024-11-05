@@ -12,11 +12,12 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Moon, Sun, User, Settings, Search, Bell, Home, BookOpen, PenTool, Share2, LogOut, Filter, ImageOff } from 'lucide-react'
+import { Moon, Sun, User, Settings, Search, Bell, Home, BookOpen, PenTool, Share2, LogOut, Filter, ImageOff, Plus, X } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useRouter } from 'next/navigation'
 import AuthService from '@/services/auth'
 import axios from '@/lib/axios'
+import { useToast } from '@/components/ui/use-toast'
 
 interface Blog {
   id: string
@@ -47,6 +48,15 @@ interface FilterState {
   author: string
   date: string
   category: string
+}
+
+interface XmlUrlRequest {
+  urls: { [key: string]: string }
+}
+
+type UrlEntry = {
+  url: string
+  domain: string
 }
 
 function ImageWithFallback({ src, alt, className }: { src: string, alt: string, className?: string }) {
@@ -127,6 +137,11 @@ export function DashboardPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [allArticles, setAllArticles] = useState<Blog[]>([])
+  const [isAddUrlsDialogOpen, setIsAddUrlsDialogOpen] = useState(false)
+  const [urlEntries, setUrlEntries] = useState<UrlEntry[]>([{ url: '', domain: '' }])
+  const [addUrlsError, setAddUrlsError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const { toast } = useToast()
 
   useEffect(() => {
     if (isDarkMode) {
@@ -276,6 +291,96 @@ export function DashboardPage() {
     fetchArticles()
   }, [])
 
+  const handleAddUrls = async (e: FormEvent) => {
+    e.preventDefault()
+    setIsSubmitting(true)
+    setAddUrlsError(null)
+
+    try {
+      const hasEmptyFields = urlEntries.some(entry => !entry.url || !entry.domain)
+      if (hasEmptyFields) {
+        toast({
+          variant: "destructive",
+          title: "Validation Error",
+          description: "Please fill in all URL and domain fields",
+        })
+        setAddUrlsError('All fields are required')
+        setIsSubmitting(false)
+        return
+      }
+
+      const urlsObject = urlEntries.reduce((acc, entry) => {
+        if (entry.url && entry.domain) {
+          acc[entry.url.trim()] = entry.domain.trim()
+        }
+        return acc
+      }, {} as { [key: string]: string })
+
+      const response = await axios.post('/xml/add-urls', {
+        urls: urlsObject
+      })
+
+      if (response.data.errors) {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: response.data.errors.join(', '),
+        })
+        setAddUrlsError(response.data.errors.join('\n'))
+      } else {
+        toast({
+          title: "Success",
+          description: `Successfully added ${Object.keys(urlsObject).length} URLs`,
+        })
+        setIsAddUrlsDialogOpen(false)
+        setUrlEntries([{ url: '', domain: '' }])
+        
+        // Refresh articles list
+        const articlesResponse = await axios.get('/article')
+        const articles = articlesResponse.data.map((article: any) => ({
+          id: article.id,
+          title: article.title,
+          description: article.summary || article.description || '',
+          fullDescription: article.content || article.fullDescription || '',
+          image: article.image_url || '',
+          author: article.author || 'Unknown',
+          date: new Date(article.published).toLocaleDateString(),
+          source: article.source || 'Unknown'
+        }))
+        setAllArticles(articles)
+        setFilteredBlogs(articles)
+      }
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || 'Failed to add URLs. Please try again.'
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: errorMessage,
+      })
+      setAddUrlsError(errorMessage)
+      console.error('Error adding URLs:', error)
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const handleUrlEntryChange = (index: number, field: keyof UrlEntry, value: string) => {
+    const newEntries = [...urlEntries]
+    newEntries[index][field] = value
+    setUrlEntries(newEntries)
+  }
+
+  const addUrlEntry = () => {
+    setUrlEntries([...urlEntries, { url: '', domain: '' }])
+  }
+
+  const removeUrlEntry = (index: number) => {
+    if (urlEntries.length > 1) {
+      const newEntries = urlEntries.filter((_, i) => i !== index)
+      setUrlEntries(newEntries)
+    }
+  }
+
   return (
     <div className={`flex h-screen ${isDarkMode ? 'dark' : ''}`}>
       {/* Sidebar */}
@@ -310,6 +415,13 @@ export function DashboardPage() {
             >
               <Filter className="mr-3 h-5 w-5" />
               Filter Blogs
+            </button>
+            <button
+              onClick={() => setIsAddUrlsDialogOpen(true)}
+              className="w-full flex items-center py-2 px-4 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors duration-200"
+            >
+              <Plus className="mr-3 h-5 w-5" />
+              Add RSS/XML URLs
             </button>
           </nav>
         </div>
@@ -631,6 +743,48 @@ export function DashboardPage() {
               Apply Filters
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add RSS/XML URLs Dialog */}
+      <Dialog open={isAddUrlsDialogOpen} onOpenChange={setIsAddUrlsDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Add RSS/XML URLs</DialogTitle>
+            <DialogDescription>
+              Enter the URLs of RSS/XML feeds you want to add.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleAddUrls} className="space-y-4">
+            {urlEntries.map((entry, index) => (
+              <div key={index}>
+                <Label htmlFor={`url-${index}`}>URL</Label>
+                <div className="flex space-x-2">
+                  <Input
+                    id={`url-${index}`}
+                    placeholder="URL"
+                    value={entry.url}
+                    onChange={(e) => handleUrlEntryChange(index, 'url', e.target.value)}
+                  />
+                  <Input
+                    id={`domain-${index}`}
+                    placeholder="Domain"
+                    value={entry.domain}
+                    onChange={(e) => handleUrlEntryChange(index, 'domain', e.target.value)}
+                  />
+                  <Button variant="outline" size="icon" onClick={() => removeUrlEntry(index)}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+            <Button variant="outline" onClick={addUrlEntry}>
+              Add URL
+            </Button>
+            <DialogFooter>
+              <Button type="submit">Add URLs</Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>
