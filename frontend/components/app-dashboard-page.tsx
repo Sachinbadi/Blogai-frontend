@@ -47,11 +47,16 @@ interface ShareFormData {
 interface FilterState {
   author: string
   date: string
-  category: string
+  xmlUrl: string
 }
 
 interface XmlUrlRequest {
   urls: { [key: string]: string }
+}
+
+interface XmlUrlData {
+  url: string
+  domain: string
 }
 
 type UrlEntry = {
@@ -122,7 +127,7 @@ export function DashboardPage() {
   const [filters, setFilters] = useState<FilterState>({
     author: 'all',
     date: 'all',
-    category: 'all'
+    xmlUrl: 'all'
   })
   const [filteredBlogs, setFilteredBlogs] = useState<Blog[]>([])
   const [shareFormData, setShareFormData] = useState<ShareFormData>({
@@ -142,6 +147,7 @@ export function DashboardPage() {
   const [addUrlsError, setAddUrlsError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const { toast } = useToast()
+  const [xmlUrls, setXmlUrls] = useState<XmlUrlData[]>([])
 
   useEffect(() => {
     if (isDarkMode) {
@@ -186,56 +192,64 @@ export function DashboardPage() {
     router.push('/auth')
   }
 
-  const applyFilters = useCallback(() => {
-    let filtered = [...allArticles]
+  const applyFilters = useCallback(async () => {
+    setIsLoading(true)
+    try {
+      let filtered = [...allArticles]
 
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase()
-      filtered = filtered.filter(blog => {
-        return (
-          blog.title.toLowerCase().includes(query) ||
-          blog.description.toLowerCase().includes(query) ||
-          blog.fullDescription.toLowerCase().includes(query) ||
-          blog.author.toLowerCase().includes(query)
-        )
-      })
-    }
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase()
+        filtered = filtered.filter(blog => {
+          return (
+            blog.title.toLowerCase().includes(query) ||
+            blog.description.toLowerCase().includes(query) ||
+            blog.fullDescription.toLowerCase().includes(query) ||
+            blog.author.toLowerCase().includes(query)
+          )
+        })
+      }
 
-    if (filters.author !== 'all') {
-      filtered = filtered.filter(blog => blog.author === filters.author)
-    }
+      if (filters.author !== 'all') {
+        filtered = filtered.filter(blog => blog.author === filters.author)
+      }
 
-    if (filters.date !== 'all') {
-      const now = new Date()
-      filtered = filtered.filter(blog => {
-        const blogDate = new Date(blog.date)
-        switch (filters.date) {
-          case 'last-week':
-            return (now.getTime() - blogDate.getTime()) <= 7 * 24 * 60 * 60 * 1000
-          case 'last-month':
-            return (now.getTime() - blogDate.getTime()) <= 30 * 24 * 60 * 60 * 1000
-          case 'last-year':
-            return (now.getTime() - blogDate.getTime()) <= 365 * 24 * 60 * 60 * 1000
-          default:
-            return true
+      if (filters.date !== 'all') {
+        const now = new Date()
+        filtered = filtered.filter(blog => {
+          const blogDate = new Date(blog.date)
+          switch (filters.date) {
+            case 'last-week':
+              return (now.getTime() - blogDate.getTime()) <= 7 * 24 * 60 * 60 * 1000
+            case 'last-month':
+              return (now.getTime() - blogDate.getTime()) <= 30 * 24 * 60 * 60 * 1000
+            case 'last-year':
+              return (now.getTime() - blogDate.getTime()) <= 365 * 24 * 60 * 60 * 1000
+            default:
+              return true
+          }
+        })
+      }
+
+      if (filters.xmlUrl !== 'all') {
+        // Fetch XML URLs to get the URL for selected domain
+        const xmlUrlsResponse = await axios.get('/xml/get-urls')
+        const selectedXmlUrl = xmlUrlsResponse.data.find((x: XmlUrlData) => x.domain === filters.xmlUrl)
+        
+        if (selectedXmlUrl) {
+          filtered = filtered.filter(article => {
+            return article.source === selectedXmlUrl.url
+          })
         }
-      })
-    }
+      }
 
-    if (filters.category !== 'all') {
-      filtered = filtered.filter(blog => blog.source === filters.category)
+      setFilteredBlogs(filtered)
+    } catch (error) {
+      setError('Failed to apply filters')
+    } finally {
+      setIsLoading(false)
+      setIsFilterOpen(false)
     }
-
-    setFilteredBlogs(filtered)
   }, [filters, searchQuery, allArticles])
-
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      applyFilters()
-    }, 300)
-
-    return () => clearTimeout(timeoutId)
-  }, [searchQuery, applyFilters])
 
   const handleShareSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -335,6 +349,10 @@ export function DashboardPage() {
         setIsAddUrlsDialogOpen(false)
         setUrlEntries([{ url: '', domain: '' }])
         
+        // Immediately fetch updated XML URLs
+        const xmlUrlsResponse = await axios.get('/xml/get-urls')
+        setXmlUrls(xmlUrlsResponse.data)
+        
         // Refresh articles list
         const articlesResponse = await axios.get('/article')
         const articles = articlesResponse.data.map((article: any) => ({
@@ -345,7 +363,8 @@ export function DashboardPage() {
           image: article.image_url || '',
           author: article.author || 'Unknown',
           date: new Date(article.published).toLocaleDateString(),
-          source: article.source || 'Unknown'
+          source: article.source || 'Unknown',
+          link: article.link || ''
         }))
         setAllArticles(articles)
         setFilteredBlogs(articles)
@@ -380,6 +399,152 @@ export function DashboardPage() {
       setUrlEntries(newEntries)
     }
   }
+
+  useEffect(() => {
+    const fetchXmlUrls = async () => {
+      try {
+        const response = await axios.get('/xml/get-urls')
+        setXmlUrls(response.data)
+      } catch (error) {
+        console.error('Error fetching XML URLs:', error)
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to fetch XML URLs",
+        })
+      }
+    }
+
+    const fetchInitialArticles = async () => {
+      try {
+        setIsLoading(true)
+        const response = await axios.get('/article')
+        const articles = response.data.map((article: any) => ({
+          id: article.id,
+          title: article.title,
+          description: article.summary || article.description || '',
+          fullDescription: article.content || article.fullDescription || '',
+          image: article.image_url || '',
+          author: article.author || 'Unknown',
+          date: new Date(article.published).toLocaleDateString(),
+          source: article.source || 'Unknown',
+          link: article.link || ''
+        }))
+        setAllArticles(articles)
+        setFilteredBlogs(articles)
+      } catch (error) {
+        console.error('Error fetching articles:', error)
+        setError('Failed to load articles')
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    fetchXmlUrls()
+    fetchInitialArticles()
+  }, [])
+
+  const fetchArticlesByXmlUrl = async (xmlUrl: string) => {
+    try {
+      setIsLoading(true)
+      const response = await axios.get('/article', {
+        params: { xml_url: xmlUrl }
+      })
+      const articles = response.data.map((article: any) => ({
+        id: article.id,
+        title: article.title,
+        description: article.summary || article.description || '',
+        fullDescription: article.content || article.fullDescription || '',
+        image: article.image_url || '',
+        author: article.author || 'Unknown',
+        date: new Date(article.published).toLocaleDateString(),
+        source: article.source || 'Unknown',
+        link: article.link || ''
+      }))
+      setAllArticles(articles)
+      setFilteredBlogs(articles)
+    } catch (error) {
+      console.error('Error fetching articles:', error)
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to fetch articles for selected source",
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Update the pollXmlUrls function
+  const pollXmlUrls = async () => {
+    try {
+      const response = await axios.get('/xml/get-urls')
+      const newXmlUrls = response.data
+      
+      // Check if there are any changes to the XML URLs
+      const hasChanges = JSON.stringify(newXmlUrls) !== JSON.stringify(xmlUrls)
+      
+      if (hasChanges) {
+        setXmlUrls(newXmlUrls)
+        // Only show toast when there are actual changes
+        if (newXmlUrls.length > xmlUrls.length) {
+          toast({
+            title: "Source List Updated",
+            description: "New sources have been added to the filter options.",
+          })
+        }
+      }
+    } catch (error) {
+      console.error('Error polling XML URLs:', error)
+    }
+  }
+
+  // Add a useEffect for polling
+  useEffect(() => {
+    // Initial fetch
+    const fetchXmlUrls = async () => {
+      try {
+        const response = await axios.get('/xml/get-urls')
+        setXmlUrls(response.data)
+      } catch (error) {
+        console.error('Error fetching XML URLs:', error)
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to fetch XML URLs",
+        })
+      }
+    }
+
+    fetchXmlUrls()
+
+    // Set up polling interval (every 30 seconds)
+    const pollInterval = setInterval(pollXmlUrls, 30000)
+
+    // Cleanup function
+    return () => {
+      clearInterval(pollInterval)
+    }
+  }, []) // Empty dependency array means this effect runs once on mount
+
+  // Add a new function for handling search
+  const handleSearch = useCallback((query: string) => {
+    if (!query.trim()) {
+      setFilteredBlogs(allArticles)
+      return
+    }
+
+    const filtered = allArticles.filter(blog => {
+      const searchStr = query.toLowerCase()
+      return (
+        blog.title.toLowerCase().includes(searchStr) ||
+        blog.description.toLowerCase().includes(searchStr) ||
+        blog.fullDescription.toLowerCase().includes(searchStr) ||
+        blog.author.toLowerCase().includes(searchStr)
+      )
+    })
+    setFilteredBlogs(filtered)
+  }, [allArticles])
 
   return (
     <div className={`flex h-screen ${isDarkMode ? 'dark' : ''}`}>
@@ -441,7 +606,10 @@ export function DashboardPage() {
                   placeholder="Search blogs..." 
                   className="pl-10 w-64 dark:bg-gray-700 dark:text-white"
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value)
+                    handleSearch(e.target.value)
+                  }}
                 />
               </div>
               <TooltipProvider>
@@ -675,6 +843,7 @@ export function DashboardPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            {/* Author Filter */}
             <div className="space-y-2">
               <Label htmlFor="author">Author</Label>
               <Select
@@ -686,8 +855,7 @@ export function DashboardPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Authors</SelectItem>
-                  {/* Get unique authors from filteredBlogs */}
-                  {Array.from(new Set(filteredBlogs.map(blog => blog.author))).map(author => (
+                  {Array.from(new Set(allArticles.map(blog => blog.author))).map(author => (
                     <SelectItem key={author} value={author}>
                       {author}
                     </SelectItem>
@@ -695,6 +863,8 @@ export function DashboardPage() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Date Filter */}
             <div className="space-y-2">
               <Label htmlFor="date">Date</Label>
               <Select
@@ -712,34 +882,48 @@ export function DashboardPage() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* XML URL Filter */}
             <div className="space-y-2">
-              <Label htmlFor="category">Source</Label>
+              <Label htmlFor="xmlUrl">Source Domain</Label>
               <Select
-                value={filters.category}
-                onValueChange={(value) => setFilters({ ...filters, category: value })}
+                value={filters.xmlUrl}
+                onValueChange={(value) => {
+                  setFilters({ ...filters, xmlUrl: value })
+                }}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select source" />
+                  <SelectValue placeholder="Select source domain" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Sources</SelectItem>
-                  {/* Get unique sources from filteredBlogs */}
-                  {Array.from(new Set(filteredBlogs.map(blog => blog.source ?? 'Unknown'))).map(source => (
-                    <SelectItem key={source} value={source}>
-                      {source}
+                  {xmlUrls.map((xmlUrl) => (
+                    <SelectItem key={xmlUrl.url} value={xmlUrl.domain}>
+                      {xmlUrl.domain}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
           </div>
+
           <DialogFooter>
-            <Button variant="outline" onClick={() => {
-              setFilters({ author: 'all', date: 'all', category: 'all' })
-            }}>
+            <Button 
+              variant="outline" 
+              onClick={() => {
+                setFilters({ 
+                  author: 'all', 
+                  date: 'all', 
+                  xmlUrl: 'all' 
+                })
+              }}
+            >
               Reset
             </Button>
-            <Button onClick={() => setIsFilterOpen(false)}>
+            <Button onClick={() => {
+              applyFilters()
+              setIsFilterOpen(false)
+            }}>
               Apply Filters
             </Button>
           </DialogFooter>
