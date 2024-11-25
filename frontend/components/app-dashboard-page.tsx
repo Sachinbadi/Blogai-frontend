@@ -12,12 +12,16 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Moon, Sun, User, Settings, Search, Bell, Home, BookOpen, PenTool, Share2, LogOut, Filter, ImageOff, Plus, X } from 'lucide-react'
+import { Moon, Sun, User, Settings, Search, Bell, Home, BookOpen, PenTool, Share2, LogOut, Filter, ImageOff, Plus, X, ExternalLink, Globe, Mail, FileText } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useRouter } from 'next/navigation'
 import AuthService from '@/services/auth'
 import axios from '@/lib/axios'
 import { useToast } from '@/components/ui/use-toast'
+ import { getArticleById } from '@/services/article'
+import { Badge } from "@/components/ui/badge"
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
 interface Blog {
   id: string
@@ -29,6 +33,7 @@ interface Blog {
   date: string
   link?: string
   source?: string
+  keyword_result?: string[] | string
 }
 
 interface User {
@@ -48,6 +53,7 @@ interface FilterState {
   author: string
   date: string
   xmlUrl: string
+  keyword: string
 }
 
 interface XmlUrlRequest {
@@ -62,6 +68,13 @@ interface XmlUrlData {
 type UrlEntry = {
   url: string
   domain: string
+}
+
+interface DetailedBlog extends Blog {
+  content: string
+  summary_result?: string
+  published?: string
+  keyword_result?: string[] | string
 }
 
 function ImageWithFallback({ src, alt, className }: { src: string, alt: string, className?: string }) {
@@ -116,6 +129,13 @@ function ImageWithFallback({ src, alt, className }: { src: string, alt: string, 
   )
 }
 
+const highlightKeyword = (text: string, keyword: string) => {
+  if (!keyword || keyword === 'all') return text
+  
+  const regex = new RegExp(`(${keyword})`, 'gi')
+  return text.replace(regex, '<mark>$1</mark>')
+}
+
 export function DashboardPage() {
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false)
   const [isBlogDialogOpen, setIsBlogDialogOpen] = useState(false)
@@ -127,7 +147,8 @@ export function DashboardPage() {
   const [filters, setFilters] = useState<FilterState>({
     author: 'all',
     date: 'all',
-    xmlUrl: 'all'
+    xmlUrl: 'all',
+    keyword: 'all'
   })
   const [filteredBlogs, setFilteredBlogs] = useState<Blog[]>([])
   const [shareFormData, setShareFormData] = useState<ShareFormData>({
@@ -148,6 +169,12 @@ export function DashboardPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const { toast } = useToast()
   const [xmlUrls, setXmlUrls] = useState<XmlUrlData[]>([])
+  const [detailedBlog, setDetailedBlog] = useState<DetailedBlog | null>(null)
+  const [showShareOptions, setShowShareOptions] = useState(false)
+  const [activeShareCard, setActiveShareCard] = useState<string | null>(null)
+  const [isKeywordOpen, setIsKeywordOpen] = useState(false)
+  const [keywordSearch, setKeywordSearch] = useState('')
+  const [keywordSuggestions, setKeywordSuggestions] = useState<string[]>([])
 
   useEffect(() => {
     if (isDarkMode) {
@@ -178,9 +205,35 @@ export function DashboardPage() {
     setIsShareDialogOpen(true)
   }
 
-  const handleBlogClick = (blog: Blog) => {
+  const handleBlogClick = async (blog: Blog) => {
     setSelectedBlog(blog)
     setIsBlogDialogOpen(true)
+    
+    try {
+      const articleDetails = await getArticleById(blog.id)
+      
+      // Process keyword_result before setting the state
+      let processedKeywords: string[] = []
+      if (articleDetails.keyword_result) {
+        processedKeywords = typeof articleDetails.keyword_result === 'string'
+          ? articleDetails.keyword_result.split(',').map(k => k.trim())
+          : articleDetails.keyword_result
+      }
+
+      setDetailedBlog({
+        ...blog,
+        content: articleDetails.content,
+        summary_result: articleDetails.summary_result,
+        published: articleDetails.published,
+        keyword_result: processedKeywords
+      })
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to load article details',
+        variant: 'destructive'
+      })
+    }
   }
 
   const toggleDarkMode = () => {
@@ -191,6 +244,39 @@ export function DashboardPage() {
     AuthService.logout()
     router.push('/auth')
   }
+
+  const getAllKeywords = useCallback(() => {
+    const keywordSet = new Set<string>()
+    
+    allArticles.forEach(article => {
+      // Extract words from title and description
+      const text = `${article.title} ${article.description}`.toLowerCase()
+      
+      // Remove special characters and split into words
+      const words = text
+        .replace(/[^a-zA-Z0-9\s]/g, '')
+        .split(/\s+/)
+        .filter(word => 
+          word.length > 2 && // Filter out short words
+          !['the', 'and', 'for', 'that', 'with', 'this', 'from'].includes(word) // Filter out common words
+        )
+      
+      // Add each word to the set
+      words.forEach(word => {
+        if (word) keywordSet.add(word)
+      })
+
+      // Also add multi-word phrases that might be important
+      const phrases = text.match(/([A-Z][a-z]+\s){1,3}[A-Z][a-z]+/g) || []
+      phrases.forEach(phrase => {
+        if (phrase) keywordSet.add(phrase.toLowerCase())
+      })
+    })
+    
+    const sortedKeywords = Array.from(keywordSet).sort()
+    console.log('Extracted keywords:', sortedKeywords)
+    return sortedKeywords
+  }, [allArticles])
 
   const applyFilters = useCallback(async () => {
     setIsLoading(true)
@@ -231,7 +317,6 @@ export function DashboardPage() {
       }
 
       if (filters.xmlUrl !== 'all') {
-        // Fetch XML URLs to get the URL for selected domain
         const xmlUrlsResponse = await axios.get('/xml/get-urls')
         const selectedXmlUrl = xmlUrlsResponse.data.find((x: XmlUrlData) => x.domain === filters.xmlUrl)
         
@@ -240,6 +325,13 @@ export function DashboardPage() {
             return article.source === selectedXmlUrl.url
           })
         }
+      }
+
+      if (filters.keyword !== 'all') {
+        filtered = filtered.filter(article => {
+          const text = `${article.title} ${article.description}`.toLowerCase()
+          return text.includes(filters.keyword.toLowerCase())
+        })
       }
 
       setFilteredBlogs(filtered)
@@ -282,16 +374,30 @@ export function DashboardPage() {
       try {
         setIsLoading(true)
         const response = await axios.get('/article')
-        const articles = response.data.map((article: any) => ({
-          id: article.id,
-          title: article.title,
-          description: article.summary || article.description || '',
-          fullDescription: article.content || article.fullDescription || '',
-          image: article.image_url || '',
-          author: article.author || 'Unknown',
-          date: new Date(article.published).toLocaleDateString(),
-          source: article.source || 'Unknown'
-        }))
+        console.log('Raw article data:', response.data)
+        
+        const articles = response.data.map((article: any) => {
+          // Process keywords
+          const keywords = article.keyword_result 
+            ? Array.isArray(article.keyword_result)
+              ? article.keyword_result
+              : article.keyword_result.split(',').map((k: string) => k.trim())
+            : []
+            
+          return {
+            id: article.id,
+            title: article.title,
+            description: article.summary || article.description || '',
+            fullDescription: article.content || article.fullDescription || '',
+            image: article.image_url || '',
+            author: article.author || '',
+            date: new Date(article.published).toLocaleDateString(),
+            source: article.source || '',
+            keyword_result: keywords
+          }
+        })
+        
+        console.log('Processed articles with keywords:', articles)
         setAllArticles(articles)
         setFilteredBlogs(articles)
       } catch (error) {
@@ -361,9 +467,9 @@ export function DashboardPage() {
           description: article.summary || article.description || '',
           fullDescription: article.content || article.fullDescription || '',
           image: article.image_url || '',
-          author: article.author || 'Unknown',
+          author: article.author || '',
           date: new Date(article.published).toLocaleDateString(),
-          source: article.source || 'Unknown',
+          source: article.source || '',
           link: article.link || ''
         }))
         setAllArticles(articles)
@@ -425,9 +531,9 @@ export function DashboardPage() {
           description: article.summary || article.description || '',
           fullDescription: article.content || article.fullDescription || '',
           image: article.image_url || '',
-          author: article.author || 'Unknown',
+          author: article.author || '',
           date: new Date(article.published).toLocaleDateString(),
-          source: article.source || 'Unknown',
+          source: article.source || '',
           link: article.link || ''
         }))
         setAllArticles(articles)
@@ -456,9 +562,9 @@ export function DashboardPage() {
         description: article.summary || article.description || '',
         fullDescription: article.content || article.fullDescription || '',
         image: article.image_url || '',
-        author: article.author || 'Unknown',
+        author: article.author || '',
         date: new Date(article.published).toLocaleDateString(),
-        source: article.source || 'Unknown',
+        source: article.source || '',
         link: article.link || ''
       }))
       setAllArticles(articles)
@@ -546,6 +652,42 @@ export function DashboardPage() {
     setFilteredBlogs(filtered)
   }, [allArticles])
 
+  const handleShareOption = (option: string) => {
+    switch(option) {
+      case 'social':
+        // Handle social media sharing
+        break
+      case 'blog':
+        // Handle blog sharing
+        break
+      case 'newsletter':
+        // Handle newsletter sharing
+        break
+      case 'rag':
+        // Handle RAG sharing
+        break
+    }
+    setShowShareOptions(false)
+  }
+
+  const updateKeywordSuggestions = useCallback((searchTerm: string) => {
+    if (!searchTerm.trim()) {
+      setKeywordSuggestions([])
+      return
+    }
+
+    const allKeywords = getAllKeywords()
+    console.log('Search term:', searchTerm)
+    console.log('Available keywords:', allKeywords)
+    
+    const matchingKeywords = allKeywords.filter(keyword =>
+      keyword.toLowerCase().includes(searchTerm.toLowerCase())
+    )
+    
+    console.log('Matching keywords:', matchingKeywords)
+    setKeywordSuggestions(matchingKeywords)
+  }, [getAllKeywords])
+
   return (
     <div className={`flex h-screen ${isDarkMode ? 'dark' : ''}`}>
       {/* Sidebar */}
@@ -574,13 +716,6 @@ export function DashboardPage() {
               <PenTool className="mr-3 h-5 w-5" />
               Create Blog
             </Link>
-            <button
-              onClick={() => setIsFilterOpen(true)}
-              className="w-full flex items-center py-2 px-4 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors duration-200"
-            >
-              <Filter className="mr-3 h-5 w-5" />
-              Filter Blogs
-            </button>
             <button
               onClick={() => setIsAddUrlsDialogOpen(true)}
               className="w-full flex items-center py-2 px-4 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors duration-200"
@@ -674,7 +809,85 @@ export function DashboardPage() {
           </div>
         </header>
 
-        {/* Blog grid */}
+        {/* Filter Bar */}
+        <div className="sticky top-0 z-10 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-sm">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-4">
+                <Button 
+                  variant="outline" 
+                  onClick={() => setIsFilterOpen(true)}
+                  className="flex items-center space-x-2 text-gray-700 dark:text-gray-300"
+                >
+                  <Filter className="h-4 w-4" />
+                  <span>Filters</span>
+                </Button>
+
+                {/* Active Filters Display */}
+                <div className="flex items-center space-x-2">
+                  {filters.author !== 'all' && (
+                    <Badge variant="secondary" className="flex items-center space-x-1">
+                      <span>Author: {filters.author}</span>
+                      <X 
+                        className="h-3 w-3 cursor-pointer" 
+                        onClick={() => setFilters(prev => ({ ...prev, author: 'all' }))}
+                      />
+                    </Badge>
+                  )}
+                  {filters.date !== 'all' && (
+                    <Badge variant="secondary" className="flex items-center space-x-1">
+                      <span>Date: {filters.date.replace('-', ' ')}</span>
+                      <X 
+                        className="h-3 w-3 cursor-pointer" 
+                        onClick={() => setFilters(prev => ({ ...prev, date: 'all' }))}
+                      />
+                    </Badge>
+                  )}
+                  {filters.xmlUrl !== 'all' && (
+                    <Badge variant="secondary" className="flex items-center space-x-1">
+                      <span>Source: {filters.xmlUrl}</span>
+                      <X 
+                        className="h-3 w-3 cursor-pointer" 
+                        onClick={() => setFilters(prev => ({ ...prev, xmlUrl: 'all' }))}
+                      />
+                    </Badge>
+                  )}
+                  {filters.keyword !== 'all' && (
+                    <Badge variant="secondary" className="flex items-center space-x-1">
+                      <span>Keyword: {filters.keyword}</span>
+                      <X 
+                        className="h-3 w-3 cursor-pointer" 
+                        onClick={() => setFilters(prev => ({ ...prev, keyword: 'all' }))}
+                      />
+                    </Badge>
+                  )}
+                </div>
+              </div>
+
+              {/* Reset Filters */}
+              {(filters.author !== 'all' || filters.date !== 'all' || filters.xmlUrl !== 'all' || filters.keyword !== 'all') && (
+                <Button 
+                  variant="ghost" 
+                  size="sm"
+                  onClick={() => {
+                    setFilters({ 
+                      author: 'all', 
+                      date: 'all', 
+                      xmlUrl: 'all',
+                      keyword: 'all'
+                    })
+                    applyFilters()
+                  }}
+                  className="text-blue-600 dark:text-blue-400"
+                >
+                  Clear All
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Main content */}
         <main className="flex-1 overflow-x-hidden overflow-y-auto bg-gray-50 dark:bg-gray-900 transition-colors duration-200">
           <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
             {isLoading ? (
@@ -688,7 +901,11 @@ export function DashboardPage() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {filteredBlogs.map((blog) => (
-                  <Card key={blog.id} className="transition-all duration-300 hover:shadow-lg hover:scale-105 dark:bg-gray-800 overflow-hidden cursor-pointer" onClick={() => handleBlogClick(blog)}>
+                  <Card 
+                    key={blog.id} 
+                    className="transition-all duration-300 hover:shadow-lg hover:scale-105 dark:bg-gray-800 overflow-hidden cursor-pointer" 
+                    onClick={() => handleBlogClick(blog)}
+                  >
                     <CardHeader className="p-0">
                       <ImageWithFallback
                         src={blog.image}
@@ -697,21 +914,76 @@ export function DashboardPage() {
                       />
                     </CardHeader>
                     <CardContent className="p-4">
-                      <CardTitle className="text-lg font-semibold mb-2 dark:text-white">{blog.title}</CardTitle>
-                      <CardDescription className="text-sm dark:text-gray-300 mb-4">{blog.description}</CardDescription>
-                      <div className="flex justify-between items-center text-sm text-gray-500 dark:text-gray-400">
-                        <span>{blog.author}</span>
+                      <CardTitle 
+                        className="text-lg font-semibold mb-2 dark:text-white"
+                        dangerouslySetInnerHTML={{
+                          __html: filters.keyword !== 'all' 
+                            ? highlightKeyword(blog.title, filters.keyword)
+                            : blog.title
+                        }}
+                      />
+                      <CardDescription 
+                        className="text-sm dark:text-gray-300 mb-4"
+                        dangerouslySetInnerHTML={{
+                          __html: filters.keyword !== 'all'
+                            ? highlightKeyword(blog.description, filters.keyword)
+                            : blog.description
+                        }}
+                      />
+                      <div className="flex justify-end items-center text-sm text-gray-500 dark:text-gray-400">
                         <span>{blog.date}</span>
                       </div>
                     </CardContent>
-                    <CardFooter className="p-4 pt-0 flex justify-between items-center">
-                      <Button variant="outline" size="sm" onClick={(e) => handleShareClick(e, blog)}>
-                        <Share2 className="mr-2 h-4 w-4" />
-                        Share
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => handleBlogClick(blog)}>
-                        Read More
-                      </Button>
+                    <CardFooter className="p-4 pt-0">
+                      <div className="w-full flex justify-between items-center">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <Share2 className="mr-2 h-4 w-4" />
+                              Share
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent className="w-56">
+                            <DropdownMenuLabel>Share Options</DropdownMenuLabel>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem 
+                              onClick={() => handleShareOption('social')}
+                              className="flex items-center cursor-pointer"
+                            >
+                              <Globe className="mr-2 h-4 w-4 text-purple-500" />
+                              <span>Post on Social Media</span>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem 
+                              onClick={() => handleShareOption('blog')}
+                              className="flex items-center cursor-pointer"
+                            >
+                              <PenTool className="mr-2 h-4 w-4 text-purple-500" />
+                              <span>Add to a Blog</span>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem 
+                              onClick={() => handleShareOption('newsletter')}
+                              className="flex items-center cursor-pointer"
+                            >
+                              <Mail className="mr-2 h-4 w-4 text-purple-500" />
+                              <span>Add to a Newsletter</span>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem 
+                              onClick={() => handleShareOption('rag')}
+                              className="flex items-center cursor-pointer"
+                            >
+                              <FileText className="mr-2 h-4 w-4 text-purple-500" />
+                              <span>Add to a RAG</span>
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                        <Button variant="ghost" size="sm" onClick={() => handleBlogClick(blog)}>
+                          Read More
+                        </Button>
+                      </div>
                     </CardFooter>
                   </Card>
                 ))}
@@ -807,9 +1079,16 @@ export function DashboardPage() {
         <DialogContent className="sm:max-w-[700px] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{selectedBlog?.title}</DialogTitle>
-            <DialogDescription className="mt-2 flex justify-between items-center text-sm text-gray-500 dark:text-gray-400">
-              <span>{selectedBlog?.author}</span>
-              <span>{selectedBlog?.date}</span>
+            <DialogDescription className="mt-2 flex justify-end text-sm text-gray-500 dark:text-gray-400">
+              {detailedBlog?.published && (
+                <span>Published: {new Date(detailedBlog.published).toLocaleDateString('en-US', {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit'
+                })}</span>
+              )}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -818,16 +1097,95 @@ export function DashboardPage() {
               alt={selectedBlog?.title ?? ''}
               className="w-full h-64 object-cover rounded-md"
             />
-            <p className="text-sm dark:text-gray-300">{selectedBlog?.fullDescription}</p>
+            {detailedBlog ? (
+              <div className="space-y-4">
+                {/* Summary Section */}
+                <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-md">
+                  <h3 className="font-semibold mb-2 text-gray-900 dark:text-white">Summary</h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-300">
+                    {detailedBlog.summary_result || 'No summary available'}
+                  </p>
+                </div>
+                
+                {/* Keywords Section */}
+                <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-md">
+                  <h3 className="font-semibold mb-2 text-gray-900 dark:text-white">Keywords</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {detailedBlog?.keyword_result ? (
+                      Array.isArray(detailedBlog.keyword_result) && detailedBlog.keyword_result.length > 0 ? (
+                        detailedBlog.keyword_result.map((keyword, index) => (
+                          <span 
+                            key={index}
+                            className="px-3 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-100 rounded-full text-sm"
+                          >
+                            {keyword}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                          No keywords available
+                        </span>
+                      )
+                    ) : (
+                      <span className="text-sm text-gray-500 dark:text-gray-400">
+                        No keywords available
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Share Options Section */}
+                <div className="space-y-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowShareOptions(!showShareOptions)}
+                    className="w-full flex items-center justify-center"
+                  >
+                    <Share2 className="mr-2 h-4 w-4" />
+                    Share Options
+                  </Button>
+                  
+                  {showShareOptions && (
+                    <div className="space-y-2">
+                      <Button
+                        variant="secondary"
+                        onClick={() => handleShareOption('social')}
+                        className="w-full bg-purple-500 hover:bg-purple-600 text-white"
+                      >
+                        Post on Social Media
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => handleShareOption('blog')}
+                        className="w-full bg-purple-500 hover:bg-purple-600 text-white"
+                      >
+                        Add to a Blog
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => handleShareOption('newsletter')}
+                        className="w-full bg-purple-500 hover:bg-purple-600 text-white"
+                      >
+                        Add to a Newsletter
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => handleShareOption('rag')}
+                        className="w-full bg-purple-500 hover:bg-purple-600 text-white"
+                      >
+                        Add to a RAG
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="flex justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 dark:border-white"></div>
+              </div>
+            )}
           </div>
-          <DialogFooter className="flex justify-between items-center">
-            <Button 
-              onClick={(e) => selectedBlog && handleShareClick(e, selectedBlog)} 
-              className="flex items-center"
-            >
-              <Share2 className="mr-2 h-4 w-4" />
-              Share
-            </Button>
+          <DialogFooter>
             <Button onClick={() => setIsBlogDialogOpen(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
@@ -847,19 +1205,21 @@ export function DashboardPage() {
             <div className="space-y-2">
               <Label htmlFor="author">Author</Label>
               <Select
-                value={filters.author}
-                onValueChange={(value) => setFilters({ ...filters, author: value })}
+                defaultValue={filters.author}
+                onValueChange={(value) => setFilters(prev => ({ ...prev, author: value }))}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select author" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Authors</SelectItem>
-                  {Array.from(new Set(allArticles.map(blog => blog.author))).map(author => (
-                    <SelectItem key={author} value={author}>
-                      {author}
-                    </SelectItem>
-                  ))}
+                  {Array.from(new Set(allArticles.map(blog => blog.author)))
+                    .filter(Boolean)
+                    .map(author => (
+                      <SelectItem key={author} value={author}>
+                        {author}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -868,8 +1228,8 @@ export function DashboardPage() {
             <div className="space-y-2">
               <Label htmlFor="date">Date</Label>
               <Select
-                value={filters.date}
-                onValueChange={(value) => setFilters({ ...filters, date: value })}
+                defaultValue={filters.date}
+                onValueChange={(value) => setFilters(prev => ({ ...prev, date: value }))}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select date range" />
@@ -887,10 +1247,8 @@ export function DashboardPage() {
             <div className="space-y-2">
               <Label htmlFor="xmlUrl">Source Domain</Label>
               <Select
-                value={filters.xmlUrl}
-                onValueChange={(value) => {
-                  setFilters({ ...filters, xmlUrl: value })
-                }}
+                defaultValue={filters.xmlUrl}
+                onValueChange={(value) => setFilters(prev => ({ ...prev, xmlUrl: value }))}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select source domain" />
@@ -905,6 +1263,78 @@ export function DashboardPage() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Keyword Filter */}
+            <div className="space-y-2">
+              <Label htmlFor="keyword">Keyword</Label>
+              <div className="relative">
+                <Input
+                  placeholder="Type to search keywords..."
+                  value={keywordSearch}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    console.log('Keyword search input:', value)
+                    setKeywordSearch(value)
+                    updateKeywordSuggestions(value)
+                  }}
+                  className="mb-2"
+                  onFocus={() => {
+                    // Show all keywords when input is focused
+                    if (!keywordSearch) {
+                      const allKeywords = getAllKeywords()
+                      setKeywordSuggestions(allKeywords)
+                    }
+                  }}
+                />
+                {keywordSearch && keywordSuggestions.length > 0 && (
+                  <div className="absolute z-[100] w-full bg-white dark:bg-gray-800 mt-1 rounded-md border shadow-lg">
+                    <div className="max-h-[200px] overflow-y-auto py-1">
+                      {keywordSuggestions.map((keyword) => (
+                        <div
+                          key={keyword}
+                          className="px-3 py-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                          onClick={() => {
+                            console.log('Selected keyword:', keyword)
+                            setFilters(prev => ({ ...prev, keyword }))
+                            setKeywordSearch('')
+                            setKeywordSuggestions([])
+                            applyFilters()
+                          }}
+                        >
+                          {keyword}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* Show "No keywords found" message when there are no matches */}
+                {keywordSearch && keywordSuggestions.length === 0 && (
+                  <div className="absolute z-50 w-full bg-white dark:bg-gray-800 mt-1 rounded-md border shadow-lg p-3">
+                    No keywords found
+                  </div>
+                )}
+                <div className="mt-2">
+                  <div className="text-sm font-medium mb-2">Selected Keywords:</div>
+                  <div className="flex flex-wrap gap-2">
+                    {filters.keyword !== 'all' && (
+                      <Badge 
+                        variant="secondary"
+                        className="flex items-center gap-1"
+                      >
+                        {filters.keyword}
+                        <X 
+                          className="h-3 w-3 cursor-pointer" 
+                          onClick={() => {
+                            setFilters(prev => ({ ...prev, keyword: 'all' }))
+                            setKeywordSearch('')
+                          }}
+                        />
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <DialogFooter>
@@ -914,7 +1344,8 @@ export function DashboardPage() {
                 setFilters({ 
                   author: 'all', 
                   date: 'all', 
-                  xmlUrl: 'all' 
+                  xmlUrl: 'all',
+                  keyword: 'all'
                 })
               }}
             >
