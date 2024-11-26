@@ -22,6 +22,13 @@ import { useToast } from '@/components/ui/use-toast'
 import { Badge } from "@/components/ui/badge"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  FacebookShareButton,
+  FacebookIcon,
+  LinkedinShareButton,
+  LinkedinIcon
+} from 'next-share'
+
 
 interface Blog {
   id: string
@@ -34,6 +41,7 @@ interface Blog {
   link?: string
   source?: string
   keyword_result?: string[] | string
+  scrape_result?: string
 }
 
 interface User {
@@ -175,6 +183,8 @@ export function DashboardPage() {
   const [isKeywordOpen, setIsKeywordOpen] = useState(false)
   const [keywordSearch, setKeywordSearch] = useState('')
   const [keywordSuggestions, setKeywordSuggestions] = useState<string[]>([])
+  const [isRagDialogOpen, setIsRagDialogOpen] = useState(false)
+  const [ragResponse, setRagResponse] = useState<{ title: string; description: string } | null>(null)
 
   useEffect(() => {
     if (isDarkMode) {
@@ -205,32 +215,13 @@ export function DashboardPage() {
     setIsShareDialogOpen(true)
   }
 
-  const handleBlogClick = async (blog: Blog) => {
-    setSelectedBlog(blog)
-    setIsBlogDialogOpen(true)
-    
-    try {
-      const articleDetails = await getArticleById(blog.id)
-      
-      // Process keyword_result before setting the state
-      let processedKeywords: string[] = []
-      if (articleDetails.keyword_result) {
-        processedKeywords = typeof articleDetails.keyword_result === 'string'
-          ? articleDetails.keyword_result.split(',').map(k => k.trim())
-          : articleDetails.keyword_result
-      }
-
-      setDetailedBlog({
-        ...blog,
-        content: articleDetails.content,
-        summary_result: articleDetails.summary_result,
-        published: articleDetails.published,
-        keyword_result: processedKeywords
-      })
-    } catch (error) {
+  const handleBlogClick = (blog: Blog) => {
+    if (blog.link) {
+      window.open(blog.link, '_blank', 'noopener,noreferrer')
+    } else {
       toast({
         title: 'Error',
-        description: 'Failed to load article details',
+        description: 'Article link not available',
         variant: 'destructive'
       })
     }
@@ -374,30 +365,18 @@ export function DashboardPage() {
       try {
         setIsLoading(true)
         const response = await axios.get('/article')
-        console.log('Raw article data:', response.data)
+        const articles = response.data.map((article: any) => ({
+          id: article.id,
+          title: article.title,
+          description: article.description || '',
+          image: article.image_url || '',
+          date: new Date(article.published).toLocaleDateString(),
+          source: article.source || '',
+          link: article.link || '',
+          scrape_result: article.scrape_result
+        }))
         
-        const articles = response.data.map((article: any) => {
-          // Process keywords
-          const keywords = article.keyword_result 
-            ? Array.isArray(article.keyword_result)
-              ? article.keyword_result
-              : article.keyword_result.split(',').map((k: string) => k.trim())
-            : []
-            
-          return {
-            id: article.id,
-            title: article.title,
-            description: article.summary || article.description || '',
-            fullDescription: article.content || article.fullDescription || '',
-            image: article.image_url || '',
-            author: article.author || '',
-            date: new Date(article.published).toLocaleDateString(),
-            source: article.source || '',
-            keyword_result: keywords
-          }
-        })
-        
-        console.log('Processed articles with keywords:', articles)
+        console.log('Processed articles:', articles)
         setAllArticles(articles)
         setFilteredBlogs(articles)
       } catch (error) {
@@ -464,13 +443,12 @@ export function DashboardPage() {
         const articles = articlesResponse.data.map((article: any) => ({
           id: article.id,
           title: article.title,
-          description: article.summary || article.description || '',
-          fullDescription: article.content || article.fullDescription || '',
+          description: article.description,
           image: article.image_url || '',
-          author: article.author || '',
           date: new Date(article.published).toLocaleDateString(),
           source: article.source || '',
-          link: article.link || ''
+          link: article.link || '',
+          scrape_result: article.scrape_result
         }))
         setAllArticles(articles)
         setFilteredBlogs(articles)
@@ -534,7 +512,8 @@ export function DashboardPage() {
           author: article.author || '',
           date: new Date(article.published).toLocaleDateString(),
           source: article.source || '',
-          link: article.link || ''
+          link: article.link || '',
+          scrape_result: article.scrape_result
         }))
         setAllArticles(articles)
         setFilteredBlogs(articles)
@@ -565,7 +544,8 @@ export function DashboardPage() {
         author: article.author || '',
         date: new Date(article.published).toLocaleDateString(),
         source: article.source || '',
-        link: article.link || ''
+        link: article.link || '',
+        scrape_result: article.scrape_result
       }))
       setAllArticles(articles)
       setFilteredBlogs(articles)
@@ -687,6 +667,39 @@ export function DashboardPage() {
     console.log('Matching keywords:', matchingKeywords)
     setKeywordSuggestions(matchingKeywords)
   }, [getAllKeywords])
+
+  const handleRagStorage = async (blog: Blog) => {
+    try {
+      const articleData = {
+        id: blog.id,
+        title: blog.title,
+        description: blog.description,
+        content: blog.description,
+        source: blog.link,
+        published_date: blog.date,
+        scrape_result: blog.scrape_result
+      }
+
+      console.log('Sending article data to RAG:', articleData)
+      
+      const response = await axios.post('/rag/store-article', articleData)
+      console.log('RAG storage response:', response.data)
+      
+      setRagResponse({
+        title: 'Success',
+        description: 'Article successfully added to RAG system'
+      })
+      
+    } catch (error: any) {
+      console.error('Error storing article in RAG:', error)
+      setRagResponse({
+        title: 'Error',
+        description: error.response?.data?.message || 'Failed to store article in RAG system'
+      })
+    } finally {
+      setIsRagDialogOpen(true)
+    }
+  }
 
   return (
     <div className={`flex h-screen ${isDarkMode ? 'dark' : ''}`}>
@@ -903,88 +916,83 @@ export function DashboardPage() {
                 {filteredBlogs.map((blog) => (
                   <Card 
                     key={blog.id} 
-                    className="transition-all duration-300 hover:shadow-lg hover:scale-105 dark:bg-gray-800 overflow-hidden cursor-pointer" 
-                    onClick={() => handleBlogClick(blog)}
+                    className="flex flex-col h-full transition-all duration-300 hover:shadow-lg hover:scale-105 dark:bg-gray-800"
                   >
-                    <CardHeader className="p-0">
+                    {/* Image Section - Fixed height with proper containment */}
+                    <div className="w-full h-48 relative overflow-hidden rounded-t-lg">
                       <ImageWithFallback
                         src={blog.image}
                         alt={blog.title}
-                        className="w-full h-48 object-cover"
+                        className="w-full h-full object-cover rounded-t-lg"
                       />
-                    </CardHeader>
-                    <CardContent className="p-4">
-                      <CardTitle 
-                        className="text-lg font-semibold mb-2 dark:text-white"
-                        dangerouslySetInnerHTML={{
-                          __html: filters.keyword !== 'all' 
-                            ? highlightKeyword(blog.title, filters.keyword)
-                            : blog.title
-                        }}
-                      />
-                      <CardDescription 
-                        className="text-sm dark:text-gray-300 mb-4"
-                        dangerouslySetInnerHTML={{
-                          __html: filters.keyword !== 'all'
-                            ? highlightKeyword(blog.description, filters.keyword)
-                            : blog.description
-                        }}
-                      />
-                      <div className="flex justify-end items-center text-sm text-gray-500 dark:text-gray-400">
-                        <span>{blog.date}</span>
-                      </div>
-                    </CardContent>
-                    <CardFooter className="p-4 pt-0">
-                      <div className="w-full flex justify-between items-center">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button 
-                              variant="outline" 
-                              size="sm" 
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <Share2 className="mr-2 h-4 w-4" />
-                              Share
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent className="w-56">
-                            <DropdownMenuLabel>Share Options</DropdownMenuLabel>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem 
-                              onClick={() => handleShareOption('social')}
-                              className="flex items-center cursor-pointer"
-                            >
-                              <Globe className="mr-2 h-4 w-4 text-purple-500" />
-                              <span>Post on Social Media</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem 
-                              onClick={() => handleShareOption('blog')}
-                              className="flex items-center cursor-pointer"
-                            >
-                              <PenTool className="mr-2 h-4 w-4 text-purple-500" />
-                              <span>Add to a Blog</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem 
-                              onClick={() => handleShareOption('newsletter')}
-                              className="flex items-center cursor-pointer"
-                            >
-                              <Mail className="mr-2 h-4 w-4 text-purple-500" />
-                              <span>Add to a Newsletter</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem 
-                              onClick={() => handleShareOption('rag')}
-                              className="flex items-center cursor-pointer"
-                            >
-                              <FileText className="mr-2 h-4 w-4 text-purple-500" />
-                              <span>Add to a RAG</span>
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                        <Button variant="ghost" size="sm" onClick={() => handleBlogClick(blog)}>
-                          Read More
+                    </div>
+
+                    {/* Content Section - Flexible height with padding */}
+                    <div className="flex flex-col h-full">
+                      <CardContent className="flex-grow p-4">
+                        <CardTitle 
+                          className="text-lg font-semibold mb-2 dark:text-white line-clamp-2"
+                          dangerouslySetInnerHTML={{
+                            __html: filters.keyword !== 'all' 
+                              ? highlightKeyword(blog.title, filters.keyword)
+                              : blog.title
+                          }}
+                        />
+                        <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-3">
+                          {blog.description}
+                        </p>
+                      </CardContent>
+
+                      {/* Buttons Section - Fixed height with padding */}
+                      <CardFooter className="p-4 flex flex-col space-y-2">
+                        {/* First row of buttons */}
+                        <div className="w-full grid grid-cols-2 gap-2">
+                          <Button 
+                            variant="outline" 
+                            className="w-full"
+                            onClick={() => handleBlogClick(blog)}
+                          >
+                            <ExternalLink className="mr-2 h-4 w-4" />
+                            Read More
+                          </Button>
+                          <Button 
+                            variant="outline"
+                            className="w-full"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleShareClick(e, blog);
+                            }}
+                          >
+                            <Share2 className="mr-2 h-4 w-4" />
+                            Share
+                          </Button>
+                        </div>
+
+                        {/* Second row - Add to RAG button */}
+                        <Button 
+                          variant="secondary"
+                          className="w-full bg-purple-500 hover:bg-purple-600 text-white"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRagStorage(blog);
+                          }}
+                        >
+                          Add to RAG
                         </Button>
-                      </div>
-                    </CardFooter>
+
+                        {/* Third row - Add to Blog button */}
+                        <Button 
+                          variant="secondary"
+                          className="w-full bg-purple-500 hover:bg-purple-600 text-white"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleShareOption('blog');
+                          }}
+                        >
+                          Add to Blog
+                        </Button>
+                      </CardFooter>
+                    </div>
                   </Card>
                 ))}
                 {filteredBlogs.length === 0 && (
@@ -1003,74 +1011,26 @@ export function DashboardPage() {
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle>Share Blog</DialogTitle>
-            <DialogDescription>Fill out the details to share this blog post.</DialogDescription>
+            <DialogDescription>Choose how you'd like to share this blog post.</DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleShareSubmit} className="space-y-4">
-            <div>
-              <Label htmlFor="title">Title</Label>
-              <Input 
-                id="title" 
-                value={shareFormData.title}
-                onChange={(e) => setShareFormData({
-                  ...shareFormData,
-                  title: e.target.value
-                })}
-              />
-            </div>
-            <div>
-              <Label htmlFor="takeaways">Key Takeaways</Label>
-              <Textarea 
-                id="takeaways" 
-                placeholder="Enter key takeaways..."
-                value={shareFormData.takeaways}
-                onChange={(e) => setShareFormData({
-                  ...shareFormData,
-                  takeaways: e.target.value
-                })}
-              />
-            </div>
-            <div>
-              <Label htmlFor="tone">Tone</Label>
-              <Select
-                value={shareFormData.tone}
-                onValueChange={(value) => setShareFormData({
-                  ...shareFormData,
-                  tone: value
-                })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select tone" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="professional">Professional</SelectItem>
-                  <SelectItem value="casual">Casual</SelectItem>
-                  <SelectItem value="humorous">Humorous</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label htmlFor="writing-style">Writing Style</Label>
-              <Select
-                value={shareFormData.writingStyle}
-                onValueChange={(value) => setShareFormData({
-                  ...shareFormData,
-                  writingStyle: value
-                })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select writing style" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="informative">Informative</SelectItem>
-                  <SelectItem value="narrative">Narrative</SelectItem>
-                  <SelectItem value="persuasive">Persuasive</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <DialogFooter>
-              <Button type="submit">Share</Button>
-            </DialogFooter>
-          </form>
+          
+          {/* Add social media buttons at the top */}
+          <div className="flex justify-center gap-4 py-4 border-b">
+            <FacebookShareButton
+              url={selectedBlog?.link || window.location.href}
+              quote={selectedBlog?.title}
+            >
+              <FacebookIcon size={40} round />
+            </FacebookShareButton>
+            
+            <LinkedinShareButton
+              url={selectedBlog?.link || window.location.href}
+              title={selectedBlog?.title}
+            >
+              <LinkedinIcon size={40} round />
+            </LinkedinShareButton>
+          </div>
+
         </DialogContent>
       </Dialog>
 
@@ -1400,6 +1360,18 @@ export function DashboardPage() {
               <Button type="submit">Add URLs</Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add RAG Response Dialog */}
+      <Dialog open={isRagDialogOpen} onOpenChange={setIsRagDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{ragResponse?.title}</DialogTitle>
+            <DialogDescription>
+              {ragResponse?.description}
+            </DialogDescription>
+          </DialogHeader>
         </DialogContent>
       </Dialog>
     </div>

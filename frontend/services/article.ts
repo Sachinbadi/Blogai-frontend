@@ -25,6 +25,6 @@ export async function getArticleById(id: string): Promise<Article> {
     if (error.response?.status === 400) {
       throw new Error('Invalid article ID')
     }
-    throw new Error('Failed to fetch article')
+    throw new Error(error)
   }
 } 
