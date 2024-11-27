@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Moon, Sun, User, Settings, Search, Bell, Home, BookOpen, PenTool, Share2, LogOut, Filter, ImageOff, Plus, X, ExternalLink, Globe, Mail, FileText } from 'lucide-react'
+import { Moon, Sun, User, Settings, Search, Bell, Home, BookOpen, PenTool, Share2, LogOut, Filter, ImageOff, Plus, X, ExternalLink, Globe, Mail, FileText, Check } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useRouter } from 'next/navigation'
 import AuthService from '@/services/auth'
@@ -185,6 +185,8 @@ export function DashboardPage() {
   const [keywordSuggestions, setKeywordSuggestions] = useState<string[]>([])
   const [isRagDialogOpen, setIsRagDialogOpen] = useState(false)
   const [ragResponse, setRagResponse] = useState<{ title: string; description: string } | null>(null)
+  const [selectedArticleIds, setSelectedArticleIds] = useState<string[]>([])
+  const [isGenerating, setIsGenerating] = useState(false)
 
   useEffect(() => {
     if (isDarkMode) {
@@ -308,8 +310,7 @@ export function DashboardPage() {
       }
 
       if (filters.xmlUrl !== 'all') {
-        const xmlUrlsResponse = await axios.get('/xml/get-urls')
-        const selectedXmlUrl = xmlUrlsResponse.data.find((x: XmlUrlData) => x.domain === filters.xmlUrl)
+        const selectedXmlUrl = xmlUrls.find((x: XmlUrlData) => x.domain === filters.xmlUrl)
         
         if (selectedXmlUrl) {
           filtered = filtered.filter(article => {
@@ -332,7 +333,7 @@ export function DashboardPage() {
       setIsLoading(false)
       setIsFilterOpen(false)
     }
-  }, [filters, searchQuery, allArticles])
+  }, [filters, searchQuery, allArticles, xmlUrls])
 
   const handleShareSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -366,7 +367,7 @@ export function DashboardPage() {
         setIsLoading(true)
         const response = await axios.get('/article')
         const articles = response.data.map((article: any) => ({
-          id: article.id,
+          id: article.ID,
           title: article.title,
           description: article.description || '',
           image: article.image_url || '',
@@ -434,14 +435,17 @@ export function DashboardPage() {
         setIsAddUrlsDialogOpen(false)
         setUrlEntries([{ url: '', domain: '' }])
         
-        // Immediately fetch updated XML URLs
-        const xmlUrlsResponse = await axios.get('/xml/get-urls')
-        setXmlUrls(xmlUrlsResponse.data)
+        // Update xmlUrls state with the new URLs
+        const newXmlUrls = Object.entries(urlsObject).map(([url, domain]) => ({
+          url,
+          domain: domain as string
+        }))
+        setXmlUrls(prev => [...prev, ...newXmlUrls])
         
         // Refresh articles list
         const articlesResponse = await axios.get('/article')
         const articles = articlesResponse.data.map((article: any) => ({
-          id: article.id,
+          id: article.id || article._id,
           title: article.title,
           description: article.description,
           image: article.image_url || '',
@@ -499,34 +503,7 @@ export function DashboardPage() {
       }
     }
 
-    const fetchInitialArticles = async () => {
-      try {
-        setIsLoading(true)
-        const response = await axios.get('/article')
-        const articles = response.data.map((article: any) => ({
-          id: article.id,
-          title: article.title,
-          description: article.summary || article.description || '',
-          fullDescription: article.content || article.fullDescription || '',
-          image: article.image_url || '',
-          author: article.author || '',
-          date: new Date(article.published).toLocaleDateString(),
-          source: article.source || '',
-          link: article.link || '',
-          scrape_result: article.scrape_result
-        }))
-        setAllArticles(articles)
-        setFilteredBlogs(articles)
-      } catch (error) {
-        console.error('Error fetching articles:', error)
-        setError('Failed to load articles')
-      } finally {
-        setIsLoading(false)
-      }
-    }
-
     fetchXmlUrls()
-    fetchInitialArticles()
   }, [])
 
   const fetchArticlesByXmlUrl = async (xmlUrl: string) => {
@@ -536,7 +513,7 @@ export function DashboardPage() {
         params: { xml_url: xmlUrl }
       })
       const articles = response.data.map((article: any) => ({
-        id: article.id,
+        id: article.ID,
         title: article.title,
         description: article.summary || article.description || '',
         fullDescription: article.content || article.fullDescription || '',
@@ -560,58 +537,6 @@ export function DashboardPage() {
       setIsLoading(false)
     }
   }
-
-  // Update the pollXmlUrls function
-  const pollXmlUrls = async () => {
-    try {
-      const response = await axios.get('/xml/get-urls')
-      const newXmlUrls = response.data
-      
-      // Check if there are any changes to the XML URLs
-      const hasChanges = JSON.stringify(newXmlUrls) !== JSON.stringify(xmlUrls)
-      
-      if (hasChanges) {
-        setXmlUrls(newXmlUrls)
-        // Only show toast when there are actual changes
-        if (newXmlUrls.length > xmlUrls.length) {
-          toast({
-            title: "Source List Updated",
-            description: "New sources have been added to the filter options.",
-          })
-        }
-      }
-    } catch (error) {
-      console.error('Error polling XML URLs:', error)
-    }
-  }
-
-  // Add a useEffect for polling
-  useEffect(() => {
-    // Initial fetch
-    const fetchXmlUrls = async () => {
-      try {
-        const response = await axios.get('/xml/get-urls')
-        setXmlUrls(response.data)
-      } catch (error) {
-        console.error('Error fetching XML URLs:', error)
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "Failed to fetch XML URLs",
-        })
-      }
-    }
-
-    fetchXmlUrls()
-
-    // Set up polling interval (every 30 seconds)
-    const pollInterval = setInterval(pollXmlUrls, 30000)
-
-    // Cleanup function
-    return () => {
-      clearInterval(pollInterval)
-    }
-  }, []) // Empty dependency array means this effect runs once on mount
 
   // Add a new function for handling search
   const handleSearch = useCallback((query: string) => {
@@ -701,8 +626,61 @@ export function DashboardPage() {
     }
   }
 
+  const handleAddToBlog = (e: React.MouseEvent, blogId: string) => {
+    e.stopPropagation()
+    
+    // Toggle selection instead of using setTimeout
+    setSelectedArticleIds(prev => {
+      if (prev.includes(blogId)) {
+        return prev.filter(id => id !== blogId)
+      }
+      return [...prev, blogId]
+    })
+    
+    // Store the ID (you can modify this to store wherever needed)
+    console.log('Stored article ID:', blogId)
+  }
+
+  const handleGenerateBlog = async () => {
+    if (selectedArticleIds.length === 0) {
+      toast({
+        title: "No Articles Selected",
+        description: "Please select at least one article to generate a blog.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsGenerating(true)
+    try {
+      const response = await axios.post('/blog/generate-blog', {
+        article_ids: selectedArticleIds
+      })
+      
+      toast({
+        title: "Success",
+        description: "Blog generated successfully!",
+      })
+      
+      // Clear selections after successful generation
+      setSelectedArticleIds([])
+      
+      // You can handle the response here, e.g., redirect to the new blog
+      // router.push(`/blog/${response.data.id}`)
+      
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.response?.data?.message || "Failed to generate blog",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
   return (
-    <div className={`flex h-screen ${isDarkMode ? 'dark' : ''}`}>
+    <div className="flex h-screen">
       {/* Sidebar */}
       <aside className="w-64 bg-white dark:bg-gray-800 shadow-md transition-colors duration-200">
         <div className="p-4">
@@ -916,8 +894,17 @@ export function DashboardPage() {
                 {filteredBlogs.map((blog) => (
                   <Card 
                     key={blog.id} 
-                    className="flex flex-col h-full transition-all duration-300 hover:shadow-lg hover:scale-105 dark:bg-gray-800"
+                    className={`flex flex-col h-full transition-all duration-300 hover:shadow-lg relative 
+                      ${selectedArticleIds.includes(blog.id) 
+                        ? 'transform scale-95 opacity-80' 
+                        : 'hover:scale-105'
+                      } dark:bg-gray-800`}
                   >
+                    {selectedArticleIds.includes(blog.id) && (
+                      <div className="absolute -top-2 -right-2 z-10 bg-purple-500 text-white rounded-full p-2 shadow-lg">
+                        <Check className="h-4 w-4" />
+                      </div>
+                    )}
                     {/* Image Section - Fixed height with proper containment */}
                     <div className="w-full h-48 relative overflow-hidden rounded-t-lg">
                       <ImageWithFallback
@@ -984,12 +971,9 @@ export function DashboardPage() {
                         <Button 
                           variant="secondary"
                           className="w-full bg-purple-500 hover:bg-purple-600 text-white"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleShareOption('blog');
-                          }}
+                          onClick={(e) => handleAddToBlog(e, blog.id)}
                         >
-                          Add to Blog
+                          {selectedArticleIds.includes(blog.id) ? 'Added to Blog' : 'Add to Blog'}
                         </Button>
                       </CardFooter>
                     </div>
@@ -1374,6 +1358,29 @@ export function DashboardPage() {
           </DialogHeader>
         </DialogContent>
       </Dialog>
+
+      {/* Floating button for generating blog */}
+      {selectedArticleIds.length > 0 && (
+        <div className="fixed bottom-8 right-8 z-50">
+          <Button 
+            size="lg"
+            className="bg-purple-500 hover:bg-purple-600 text-white shadow-lg"
+            onClick={handleGenerateBlog}
+            disabled={isGenerating}
+          >
+            {isGenerating ? (
+              <>
+                <div className="animate-spin mr-2 h-4 w-4 border-2 border-b-transparent border-white rounded-full" />
+                Generating...
+              </>
+            ) : (
+              <>
+                Generate Blog ({selectedArticleIds.length})
+              </>
+            )}
+          </Button>
+        </div>
+      )}
     </div>
   )
 }
