@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Moon, Sun, User, Settings, Search, Bell, Home, BookOpen, PenTool, Share2, LogOut, Filter, ImageOff, Plus, X, ExternalLink, Globe, Mail, FileText, Check } from 'lucide-react'
+import { Moon, Sun, User, Settings, Search, Bell, Home, BookOpen, PenTool, Share2, LogOut, Filter, ImageOff, Plus, X, ExternalLink, Globe, Mail, FileText, Check, Loader2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useRouter } from 'next/navigation'
 import AuthService from '@/services/auth'
@@ -144,6 +144,41 @@ const highlightKeyword = (text: string, keyword: string) => {
   return text.replace(regex, '<mark>$1</mark>')
 }
 
+function GeneratingBlogLoader() {
+  return (
+    <Dialog open={true}>
+      <DialogContent className="sm:max-w-md">
+        <div className="flex flex-col items-center justify-center space-y-6 py-8">
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="h-32 w-32 rounded-full border-4 border-purple-200 opacity-20 animate-ping" />
+            </div>
+            <div className="relative flex items-center justify-center">
+              <Loader2 className="h-16 w-16 text-purple-500 animate-spin" />
+            </div>
+          </div>
+          <div className="text-center space-y-2">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+              Generating Your Blog
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Please wait while we create your blog post...
+            </p>
+          </div>
+          <div className="flex flex-col items-center space-y-2">
+            <div className="h-1.5 w-64 bg-gray-200 rounded-full overflow-hidden">
+              <div className="h-full bg-purple-500 rounded-full animate-progress" />
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              This may take a few moments
+            </p>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function DashboardPage() {
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false)
   const [isBlogDialogOpen, setIsBlogDialogOpen] = useState(false)
@@ -187,6 +222,12 @@ export function DashboardPage() {
   const [ragResponse, setRagResponse] = useState<{ title: string; description: string } | null>(null)
   const [selectedArticleIds, setSelectedArticleIds] = useState<string[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
+  const [shareUrl, setShareUrl] = useState('')
+  const [showGeneratingLoader, setShowGeneratingLoader] = useState(false)
+
+  useEffect(() => {
+    setShareUrl(window.location.href)
+  }, [])
 
   useEffect(() => {
     if (isDarkMode) {
@@ -652,22 +693,34 @@ export function DashboardPage() {
     }
 
     setIsGenerating(true)
+    setShowGeneratingLoader(true)
+
     try {
       const response = await axios.post('/blog/generate-blog', {
         article_ids: selectedArticleIds
       })
       
-      toast({
-        title: "Success",
-        description: "Blog generated successfully!",
-      })
-      
-      // Clear selections after successful generation
-      setSelectedArticleIds([])
-      
-      // You can handle the response here, e.g., redirect to the new blog
-      // router.push(`/blog/${response.data.id}`)
-      
+      if (response.data.status === 'success') {
+        const generatedBlog = {
+          id: Date.now().toString(),
+          title: extractTitle(response.data.blog_post),
+          content: response.data.blog_post,
+          image: response.data.image_path,
+          createdAt: new Date().toISOString(),
+          keywords: extractKeywords(response.data.blog_post)
+        }
+
+        const existingBlogs = JSON.parse(localStorage.getItem('generatedBlogs') || '[]')
+        localStorage.setItem('generatedBlogs', JSON.stringify([...existingBlogs, generatedBlog]))
+
+        toast({
+          title: "Success",
+          description: "Blog generated successfully!",
+        })
+        
+        setSelectedArticleIds([])
+        router.push('/dashboard/my-blogs')
+      }
     } catch (error: any) {
       toast({
         title: "Error",
@@ -676,7 +729,23 @@ export function DashboardPage() {
       })
     } finally {
       setIsGenerating(false)
+      setShowGeneratingLoader(false)
     }
+  }
+
+  // Helper function to extract title from the blog post
+  const extractTitle = (blogPost: string): string => {
+    const titleMatch = blogPost.match(/\*\*Title:\*\* (.*?)\n/)
+    return titleMatch ? titleMatch[1] : 'Untitled Blog'
+  }
+
+  // Helper function to extract keywords from the blog post
+  const extractKeywords = (blogPost: string): string[] => {
+    const keywordsMatch = blogPost.match(/\*\*Keywords:\*\* (.*?)\n/)
+    if (keywordsMatch) {
+      return keywordsMatch[1].split(', ')
+    }
+    return []
   }
 
   return (
@@ -1001,14 +1070,14 @@ export function DashboardPage() {
           {/* Add social media buttons at the top */}
           <div className="flex justify-center gap-4 py-4 border-b">
             <FacebookShareButton
-              url={selectedBlog?.link || window.location.href}
+              url={selectedBlog?.link || shareUrl}
               quote={selectedBlog?.title}
             >
               <FacebookIcon size={40} round />
             </FacebookShareButton>
             
             <LinkedinShareButton
-              url={selectedBlog?.link || window.location.href}
+              url={selectedBlog?.link || shareUrl}
               title={selectedBlog?.title}
             >
               <LinkedinIcon size={40} round />
@@ -1059,19 +1128,19 @@ export function DashboardPage() {
                       Array.isArray(detailedBlog.keyword_result) && detailedBlog.keyword_result.length > 0 ? (
                         detailedBlog.keyword_result.map((keyword, index) => (
                           <span 
-                            key={index}
+                            key={`${keyword}-${index}`}
                             className="px-3 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-100 rounded-full text-sm"
                           >
                             {keyword}
                           </span>
                         ))
                       ) : (
-                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                        <span key="no-keywords" className="text-sm text-gray-500 dark:text-gray-400">
                           No keywords available
                         </span>
                       )
                     ) : (
-                      <span className="text-sm text-gray-500 dark:text-gray-400">
+                      <span key="no-keywords-null" className="text-sm text-gray-500 dark:text-gray-400">
                         No keywords available
                       </span>
                     )}
@@ -1081,6 +1150,7 @@ export function DashboardPage() {
                 {/* Share Options Section */}
                 <div className="space-y-2">
                   <Button
+                    key="share-options-button"
                     variant="outline"
                     onClick={() => setShowShareOptions(!showShareOptions)}
                     className="w-full flex items-center justify-center"
@@ -1092,6 +1162,7 @@ export function DashboardPage() {
                   {showShareOptions && (
                     <div className="space-y-2">
                       <Button
+                        key="social-share"
                         variant="secondary"
                         onClick={() => handleShareOption('social')}
                         className="w-full bg-purple-500 hover:bg-purple-600 text-white"
@@ -1099,6 +1170,7 @@ export function DashboardPage() {
                         Post on Social Media
                       </Button>
                       <Button
+                        key="blog-share"
                         variant="secondary"
                         onClick={() => handleShareOption('blog')}
                         className="w-full bg-purple-500 hover:bg-purple-600 text-white"
@@ -1106,6 +1178,7 @@ export function DashboardPage() {
                         Add to a Blog
                       </Button>
                       <Button
+                        key="newsletter-share"
                         variant="secondary"
                         onClick={() => handleShareOption('newsletter')}
                         className="w-full bg-purple-500 hover:bg-purple-600 text-white"
@@ -1113,6 +1186,7 @@ export function DashboardPage() {
                         Add to a Newsletter
                       </Button>
                       <Button
+                        key="rag-share"
                         variant="secondary"
                         onClick={() => handleShareOption('rag')}
                         className="w-full bg-purple-500 hover:bg-purple-600 text-white"
@@ -1381,6 +1455,8 @@ export function DashboardPage() {
           </Button>
         </div>
       )}
+
+      {showGeneratingLoader && <GeneratingBlogLoader />}
     </div>
   )
 }
