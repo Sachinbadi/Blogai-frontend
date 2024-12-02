@@ -28,6 +28,7 @@ import {
   LinkedinShareButton,
   LinkedinIcon
 } from 'next-share'
+import { BlogEditorDialog } from '@/components/blog-editor-dialog'
 
 
 interface Blog {
@@ -224,6 +225,13 @@ export function DashboardPage() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [shareUrl, setShareUrl] = useState('')
   const [showGeneratingLoader, setShowGeneratingLoader] = useState(false)
+  const [isEditorDialogOpen, setIsEditorDialogOpen] = useState(false)
+  const [generatedBlogContent, setGeneratedBlogContent] = useState<{
+    title: string
+    content: string
+    image?: string
+    keywords?: string[]
+  } | null>(null)
 
   useEffect(() => {
     setShareUrl(window.location.href)
@@ -701,25 +709,41 @@ export function DashboardPage() {
       })
       
       if (response.data.status === 'success') {
-        const generatedBlog = {
-          id: Date.now().toString(),
-          title: extractTitle(response.data.blog_post),
-          content: response.data.blog_post,
+        const blogPost = response.data.blog_post
+        
+        // Extract title and keywords using regex
+        const titleMatch = blogPost.match(/\*\*Title:\*\* (.*?)(?=\n)/)
+        const keywordsMatch = blogPost.match(/\*\*Keywords:\*\* (.*?)(?=\n)/)
+        
+        // Get title and keywords
+        const title = titleMatch ? titleMatch[1].trim() : 'Untitled Blog'
+        const keywords = keywordsMatch 
+          ? keywordsMatch[1].split(',').map((k: string) => k.trim())
+          : []
+        
+        // Remove the variables sections and clean up the content
+        let content = blogPost
+          .replace(/\*\*Title:\*\* .*?\n/, '')
+          .replace(/\*\*Keywords:\*\* .*?\n/, '')
+          .trim()
+
+        // Format content
+        content = content
+          .replace(/\n{3,}/g, '\n\n') // Replace multiple newlines with double newline
+          .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Convert markdown bold to HTML
+          .replace(/\*(.*?)\*/g, '<em>$1</em>') // Convert markdown italic to HTML
+          .replace(/\n/g, '<br>') // Convert newlines to HTML breaks
+
+        setGeneratedBlogContent({
+          title,
+          content,
           image: response.data.image_path,
-          createdAt: new Date().toISOString(),
-          keywords: extractKeywords(response.data.blog_post)
-        }
-
-        const existingBlogs = JSON.parse(localStorage.getItem('generatedBlogs') || '[]')
-        localStorage.setItem('generatedBlogs', JSON.stringify([...existingBlogs, generatedBlog]))
-
-        toast({
-          title: "Success",
-          description: "Blog generated successfully!",
+          keywords
         })
         
+        // Open the editor dialog
+        setIsEditorDialogOpen(true)
         setSelectedArticleIds([])
-        router.push('/dashboard/my-blogs')
       }
     } catch (error: any) {
       toast({
@@ -746,6 +770,36 @@ export function DashboardPage() {
       return keywordsMatch[1].split(', ')
     }
     return []
+  }
+
+  // Add handler for saving edited blog
+  const handleSaveEditedBlog = (editedBlog: {
+    title: string
+    content: string
+    image?: string
+    keywords?: string[]
+  }) => {
+    const generatedBlog = {
+      id: Date.now().toString(),
+      title: editedBlog.title,
+      content: editedBlog.content,
+      image: editedBlog.image,
+      createdAt: new Date().toISOString(),
+      keywords: editedBlog.keywords,
+      isHtml: true
+    }
+
+    const existingBlogs = JSON.parse(localStorage.getItem('generatedBlogs') || '[]')
+    localStorage.setItem('generatedBlogs', JSON.stringify([...existingBlogs, generatedBlog]))
+
+    toast({
+      title: "Success",
+      description: "Blog saved successfully!",
+    })
+    
+    setIsEditorDialogOpen(false)
+    setGeneratedBlogContent(null)
+    router.push('/dashboard/my-blogs')
   }
 
   return (
@@ -1457,6 +1511,16 @@ export function DashboardPage() {
       )}
 
       {showGeneratingLoader && <GeneratingBlogLoader />}
+
+      {/* Blog Editor Dialog */}
+      {generatedBlogContent && (
+        <BlogEditorDialog
+          open={isEditorDialogOpen}
+          onOpenChange={setIsEditorDialogOpen}
+          initialContent={generatedBlogContent}
+          SaveId="blog-save-id"
+        />
+      )}
     </div>
   )
 }
