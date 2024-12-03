@@ -721,15 +721,28 @@ export function DashboardPage() {
           ? keywordsMatch[1].split(',').map((k: string) => k.trim())
           : []
         
-        // Remove the variables sections and clean up the content
+        // Remove all sections we don't want
         let content = blogPost
+          // Remove variables section
           .replace(/\*\*Title:\*\* .*?\n/, '')
           .replace(/\*\*Keywords:\*\* .*?\n/, '')
+          // Remove items section
+          .replace(/\*\*Items:\*\* .*?\n/, '')
+          .replace(/Items:\n.*?\n\n/, '')
+          // Remove media section
+          .replace(/\*\*Media:\*\* .*?\n/, '')
+          .replace(/Media:\n.*?\n\n/, '')
+          // Remove links section
+          .replace(/\*\*Links:\*\* .*?\n/, '')
+          .replace(/Links:\n.*?\n\n/, '')
+          // Remove any other variables-like patterns
+          .replace(/\*\*[^*]+:\*\* .*?\n/, '')
+          // Clean up extra newlines
+          .replace(/\n{3,}/g, '\n\n')
           .trim()
 
         // Format content
         content = content
-          .replace(/\n{3,}/g, '\n\n') // Replace multiple newlines with double newline
           .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Convert markdown bold to HTML
           .replace(/\*(.*?)\*/g, '<em>$1</em>') // Convert markdown italic to HTML
           .replace(/\n/g, '<br>') // Convert newlines to HTML breaks
@@ -741,7 +754,6 @@ export function DashboardPage() {
           keywords
         })
         
-        // Open the editor dialog
         setIsEditorDialogOpen(true)
         setSelectedArticleIds([])
       }

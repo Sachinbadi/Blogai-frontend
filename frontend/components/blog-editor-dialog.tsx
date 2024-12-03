@@ -306,10 +306,22 @@ export function BlogEditorDialog({
         throw new Error('Title is required')
       }
       
-      onSave({
-        ...content,
-        content: editorRef.current.innerHTML
-      })
+      // Create blog object
+      const blogToSave = {
+        id: Date.now().toString(),
+        title: content.title,
+        content: editorRef.current.innerHTML,
+        image: content.image,
+        keywords: content.keywords,
+        createdAt: new Date().toISOString(),
+        isHtml: true
+      }
+
+      // Get existing blogs from localStorage
+      const existingBlogs = JSON.parse(localStorage.getItem('generatedBlogs') || '[]')
+      
+      // Add new blog to existing blogs
+      localStorage.setItem('generatedBlogs', JSON.stringify([...existingBlogs, blogToSave]))
       
       // Close the dialog after saving
       onOpenChange(false)
@@ -319,10 +331,18 @@ export function BlogEditorDialog({
         title: "Success",
         description: "Blog saved successfully!",
       })
+
+      // Navigate to My Blogs page
+      window.location.href = '/dashboard/my-blogs'
     } catch (err) {
       throwAsyncError(err)
+      toast({
+        title: "Error",
+        description: err instanceof Error ? err.message : "Failed to save blog",
+        variant: "destructive",
+      })
     }
-  }, [content, onSave, throwAsyncError, onOpenChange])
+  }, [content, onOpenChange, throwAsyncError, toast])
 
   // Add share and save handler
   const handleShareAndSave = useCallback(() => {
@@ -400,7 +420,7 @@ export function BlogEditorDialog({
                 <Button 
                   variant="outline"
                   onClick={handleShareAndSave}
-                  className="bg-black hover:bg-black-600 text-white"
+                  className="bg-black hover:bg-white-600 text-white"
                 >
                   <Share2 className="h-4 w-4 mr-2" />
                   Share & Save
